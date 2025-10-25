@@ -1,0 +1,163 @@
+grafana:
+  enabled: true
+  adminUser: admin
+  adminPassword: admin123 # TODO: override via secret in production
+  defaultDashboardsEnabled: false
+  persistence:
+    enabled: true
+    size: 10Gi
+  service:
+    type: ClusterIP
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: Kubernetes
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-operated:9090
+          access: proxy
+          isDefault: true
+        - name: Loki
+          type: loki
+          url: http://loki:3100
+          access: proxy
+          jsonData:
+            maxLines: 1000
+
+alertmanager:
+  enabled: true
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      group_by: ['alertname']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 3h
+      receiver: default-receiver
+    receivers:
+      - name: default-receiver
+        slack_configs:
+          - send_resolved: true
+            channel: devops-alerts
+            api_url: https://hooks.slack.com/services/REPLACE/ME # Override during deployment
+    inhibit_rules:
+      - source_matchers: [severity="critical"]
+        target_matchers: [severity="warning"]
+        equal: ['alertname', 'namespace']
+
+prometheusOperator:
+  enabled: true
+  tls:
+    enabled: false
+  admissionWebhooks:
+    enabled: false
+    patch:
+      enabled: false
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    serviceMonitorSelector: {}
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    externalLabels:
+      cluster: devops-project-4
+      environment: production
+    scrapeInterval: 15s
+    evaluationInterval: 30s
+    enableRemoteWriteReceiver: true
+    retention: 30d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    additionalScrapeConfigsSecret: ''
+    thanos:
+      create: false
+  serviceAccount:
+    create: true
+  additionalServiceMonitors: []
+
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+grafanaSidecar:
+  datasources:
+    defaultDatasourceEnabled: false
+
+additionalPrometheusRulesMap:
+  core-alerts:
+    groups:
+      - name: application-health
+        interval: 30s
+        rules:
+          - alert: HighErrorRate
+            expr: sum(rate(application_errors_total[5m])) by (type) > 5
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High application error rate"
+              description: "Error rate for {{ $labels.type }} exceeded threshold for 2 minutes."
+          - alert: SlowHttpResponses
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "95th percentile latency above 500ms"
+              description: "95th percentile response time is higher than expected."
+      - name: infrastructure-health
+        interval: 1m
+        rules:
+          - alert: PrometheusTargetDown
+            expr: sum(up == 0) by (job) > 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Prometheus targets are down"
+              description: "{{ $value }} scrape targets are down for job {{ $labels.job }}."
+          - alert: PodRestartFlood
+            expr: increase(kube_pod_container_status_restarts_total[15m]) > 3
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Pod restarting too frequently"
+              description: "Pod {{ $labels.pod }} restarted more than 3 times in 15 minutes."

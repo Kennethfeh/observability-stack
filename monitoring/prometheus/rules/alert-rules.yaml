@@ -1,0 +1,47 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: application-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api-health
+      interval: 30s
+      rules:
+        - alert: ApiHighLatency
+          expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{endpoint="/"}[5m])) by (le)) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: 95th percentile latency is above 500ms
+            description: API latency p95 is breaching SLO for 5 minutes.
+        - alert: ApiErrorSpike
+          expr: increase(application_errors_total[5m]) > 10
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Error rate has spiked above normal baseline
+            description: More than 10 errors recorded in 5 minutes.
+    - name: infrastructure-health
+      interval: 1m
+      rules:
+        - alert: PodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total[10m]) > 3
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Pod is restarting frequently
+            description: Pod {{ $labels.pod }} restarted more than 3 times in the last 10 minutes.
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: Node is not ready
+            description: Node {{ $labels.node }} has been reporting NotReady for more than 3 minutes.
